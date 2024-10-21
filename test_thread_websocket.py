@@ -3,66 +3,66 @@ import json
 import threading
 import time
 
-# تعداد درخواست‌ها
+# Number of requests
 num_requests = 500
 received_messages = 0
-lock = threading.Lock()  # قفل برای جلوگیری از تداخل
+lock = threading.Lock()  # Lock to prevent race conditions
 
-# تابع برای پردازش پیام‌ها
+# Function to process messages
 def on_message(ws, message):
     global received_messages
     with lock:
-        received_messages += 1  # افزایش شمارش پیام‌های دریافتی
+        received_messages += 1  # Increment the count of received messages
         print(f"Received message {received_messages}: {message}")
 
-# تابع برای مدیریت خطاها
+# Function to handle errors
 def on_error(ws, error):
     print(f"Error: {error}")
 
-# تابع برای بستن ارتباط
+# Function to handle connection closure
 def on_close(ws, close_status_code, close_msg):
     print("Connection closed")
 
-# تابع برای شروع ارتباط
+# Function to start the connection
 def on_open(ws):
     print("Connection opened")
-    # ارسال پیام اشتراک برای دریافت داده‌های معاملاتی
+    # Send subscription message to receive trade data
     subscribe_message = {
         "method": "SUBSCRIBE",
         "params": [
-            "btcusdt@trade",  # نمونه‌ای از جفت ارز
+            "btcusdt@trade",  # Example of a currency pair
         ],
         "id": 1
     }
     ws.send(json.dumps(subscribe_message))
 
-# آدرس وب‌سوکت بایننس
+# Binance WebSocket URL
 socket_url = "wss://stream.binance.com:9443/ws"
 
-# زمان شروع
+# Start time
 start_time = time.time()
 
-# ایجاد وب‌سوکت
+# Create WebSocket
 ws = websocket.WebSocketApp(socket_url,
                             on_message=on_message,
                             on_error=on_error,
                             on_close=on_close)
 
-# شروع ارتباط
+# Start connection
 ws.on_open = on_open
 
-# اجرای وب‌سوکت در یک رشته جداگانه
+# Run WebSocket in a separate thread
 ws_thread = threading.Thread(target=ws.run_forever)
 ws_thread.start()
 
-# صبر کنید تا تعداد درخواست‌ها دریافت شود
+# Wait until the number of requests is received
 while received_messages < num_requests:
-    time.sleep(0.1)  # مدت زمان کوتاه برای چک کردن شمارش
+    time.sleep(0.1)  # Short sleep to check the message count
 
-# بستن وب‌سوکت
+# Close the WebSocket
 ws.close()
 
-# زمان پایان و محاسبه زمان کل
+# End time and calculate total time
 end_time = time.time()
 elapsed_time = end_time - start_time
 print(f"Total time for {num_requests} messages: {elapsed_time:.2f} seconds")
