@@ -1,7 +1,16 @@
 # binance/urls.py
-from django.urls import path
-from .views import BinancePairsView
+
+# from rest_framework.routers import DefaultRouter
+from django.urls import path, include
+from .views import BinancePairs
+
+# router =DefaultRouter()
+
+# router.register('pairs', views.BinancePairs,)
+
+
 
 urlpatterns = [
-    path('pairs/', BinancePairsView.as_view(), name='binance_pairs'),
+    
+    path('pairs/', BinancePairs.as_view(), name='binance_pairs')
 ]
