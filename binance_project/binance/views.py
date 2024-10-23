@@ -31,15 +31,25 @@ from rest_framework import status
 class BinancePairs(APIView):
     
     def get(self, request):
-        url = 'https://api.binance.com/api/v3/ticker/price'
+        url = 'https://api.wallex.ir/v1/markets'
 
         starttime = time.time()
+        
+        successful_requests = 0
+        errors = 0
+        
+        datas = []
 
         for _ in range(10):  
             response = requests.get(url)
-            if response.status_code != 200:
-                return Response({'error': f'Error: {response.status_code}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            # return response.json()
+            if response.status_code == 200:
+                successful_requests += 1
+                datas.append(response.json())
+            else:
+                errors += 1
+                
+            time.sleep(1)
+            
             
             
         
@@ -47,4 +57,10 @@ class BinancePairs(APIView):
         totaltime = endtime - starttime
 
         
-        return Response({'message': f'Total time for 500 requests: {totaltime:.2f} seconds'}, status=status.HTTP_200_OK)
+        return Response({
+            'message': f'Total time for 50 requests: {totaltime:.2f} seconds',
+            'successful_requests': successful_requests,
+            'errors': errors,
+            'datas': datas
+        }, status=status.HTTP_200_OK)
+
