@@ -1,7 +1,8 @@
 #ignore venv
 env
-binance_en
+binance_env
 test_env
+
 #ignore db
 db.sqlite3
 
@@ -20,8 +21,6 @@ __pycache__/
 # salary/migrations
 # personnel/__pycache__
 # personnel/migrations
-
-
 
 #ignore migrations file
 */migrations/
