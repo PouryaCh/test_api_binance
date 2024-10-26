@@ -1,0 +1,42 @@
+#ignore venv
+env
+binance_en
+test_env
+#ignore db
+db.sqlite3
+
+#ignore migrations file
+*/migrations/
+
+# Ignore Python bytecode files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# #ignore migrations file
+# salary/__pycache__
+# salary/migrations
+# personnel/__pycache__
+# personnel/migrations
+
+
+
+#ignore migrations file
+*/migrations/
+
+Ignore Python bytecode files
+pycache/
+*.pyc
+*.pyo
+*.pyd
+
+# #ignore migrations file
+# salary/pycache
+# salary/migrations
+# personnel/pycache
+# personnel/migrations
+
+#env
+.env
