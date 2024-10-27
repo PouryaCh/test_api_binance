@@ -4,6 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from .models import BinancePair
+
+from .serializer import BinancePairSerializer
 
 
 
@@ -58,12 +61,12 @@ def fetch_data(url):
         return {'error': str(e)} 
 
 
-class BinancePairs(APIView):
+class BinancePairsView(APIView):
     
     def get(self, request):
         url = 'https://api.binance.com/api/v3/ticker/price'
         num_requests = 20
-        num_threads = min(num_requests, 20)
+        num_threads = 10
         delay_between_batches = 2  
         
         successful_requests = 0
@@ -74,6 +77,7 @@ class BinancePairs(APIView):
 
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             for i in range(0, num_requests, num_threads):
+
                 futures = [executor.submit(fetch_data, url) for _ in range(num_threads)]
                 
                 
@@ -82,6 +86,17 @@ class BinancePairs(APIView):
                     if result and 'error' not in result:
                         successful_requests += 1
                         datas.append(result)
+                        
+                        for data in result:
+                            serializer = BinancePairSerializer(data={
+                                'symbol' : data['symbol'],
+                                'price' : data['price']
+                            })
+                            if serializer.is_valid():
+                                serializer.save()
+                            else:
+                                errors.append(serializer.errors) 
+                       
                     else:
                         errors.append(result.get("error", "Unknown error"))
                     
@@ -91,7 +106,7 @@ class BinancePairs(APIView):
 
         endtime = time.time()  
         totaltime = endtime - starttime  
-
+        
         return Response({
             'message': f'Total requests: {num_requests}',
             'successful_requests': successful_requests,
