@@ -182,15 +182,16 @@
 # **************************************************************************************
 
 import requests
-import requests
-import time
+# import time
 from datetime import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .models import Pairs, PairsKlines
-
-class PairsView(APIView):
+from rest_framework.pagination import PageNumberPagination
+from .serializer import PairsSerializer
+class PairsView(APIView, PageNumberPagination):
+    
     def get(self, request):
         url = 'https://api.binance.com/api/v3/ticker/price'
         
@@ -210,9 +211,17 @@ class PairsView(APIView):
                     'price': str(pair_obj.price),
                 })
                 
+            result = self.paginate_queryset(saved_pairs, request, view=self)
+            serializer = PairsSerializer(result, many=True)
+            
             return Response({
                 'message': 'Pairs data fetched and saved successfully',
-                'pairs': saved_pairs
+                'count': len(saved_pairs), 
+                'next': self.get_next_link(),  
+                'previous': self.get_previous_link(),  
+                'current_page': request.query_params.get('page', 1),  
+                'total_pages': (len(saved_pairs) + self.page_size - 1) // self.page_size,  
+                'pairs': serializer.data
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
