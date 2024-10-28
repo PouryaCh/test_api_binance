@@ -1,12 +1,12 @@
-import requests
-import time
-from concurrent.futures import ThreadPoolExecutor
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .models import BinancePair
+# import requests
+# import time
+# from concurrent.futures import ThreadPoolExecutor
+# from rest_framework.views import APIView
+# from rest_framework.response import Response
+# from rest_framework import status
+# from .models import BinancePair
 
-from .serializer import BinancePairSerializer
+# from .serializer import BinancePairSerializer
 
 
 
@@ -52,68 +52,68 @@ from .serializer import BinancePairSerializer
 
 # ********************************************************
 
-def fetch_data(url):
-    try:
-        response = requests.get(url)
-        response.raise_for_status() 
-        return response.json()  
-    except requests.exceptions.RequestException as e:
-        return {'error': str(e)} 
+# def fetch_data(url):
+#     try:
+#         response = requests.get(url)
+#         response.raise_for_status() 
+#         return response.json()  
+#     except requests.exceptions.RequestException as e:
+#         return {'error': str(e)} 
 
 
-class BinancePairsView(APIView):
+# class BinancePairsView(APIView):
     
-    def get(self, request):
-        url = 'https://api.binance.com/api/v3/ticker/price'
-        num_requests = 20
-        num_threads = 10
-        delay_between_batches = 2  
+#     def get(self, request):
+#         url = 'https://api.binance.com/api/v3/ticker/price'
+#         num_requests = 20
+#         num_threads = 10
+#         delay_between_batches = 2  
         
-        successful_requests = 0
-        errors = []
-        datas = []
+#         successful_requests = 0
+#         errors = []
+#         datas = []
 
-        starttime = time.time()  
+#         starttime = time.time()  
 
-        with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            for i in range(0, num_requests, num_threads):
+#         with ThreadPoolExecutor(max_workers=num_threads) as executor:
+#             for i in range(0, num_requests, num_threads):
 
-                futures = [executor.submit(fetch_data, url) for _ in range(num_threads)]
+#                 futures = [executor.submit(fetch_data, url) for _ in range(num_threads)]
                 
                 
-                for future in futures:
-                    result = future.result()
-                    if result and 'error' not in result:
-                        successful_requests += 1
-                        datas.append(result)
+#                 for future in futures:
+#                     result = future.result()
+#                     if result and 'error' not in result:
+#                         successful_requests += 1
+#                         datas.append(result)
                         
-                        for data in result:
-                            serializer = BinancePairSerializer(data={
-                                'symbol' : data['symbol'],
-                                'price' : data['price']
-                            })
-                            if serializer.is_valid():
-                                serializer.save()
-                            else:
-                                errors.append(serializer.errors) 
+#                         for data in result:
+#                             serializer = BinancePairSerializer(data={
+#                                 'symbol' : data['symbol'],
+#                                 'price' : data['price']
+#                             })
+#                             if serializer.is_valid():
+#                                 serializer.save()
+#                             else:
+#                                 errors.append(serializer.errors) 
                        
-                    else:
-                        errors.append(result.get("error", "Unknown error"))
+#                     else:
+#                         errors.append(result.get("error", "Unknown error"))
                     
 
                 
-                time.sleep(delay_between_batches)
+#                 time.sleep(delay_between_batches)
 
-        endtime = time.time()  
-        totaltime = endtime - starttime  
+#         endtime = time.time()  
+#         totaltime = endtime - starttime  
         
-        return Response({
-            'message': f'Total requests: {num_requests}',
-            'successful_requests': successful_requests,
-            'errors': errors,
-            'total_time': f'{totaltime:.2f} seconds',  
-            'datas': datas
-        }, status=status.HTTP_200_OK)
+#         return Response({
+#             'message': f'Total requests: {num_requests}',
+#             'successful_requests': successful_requests,
+#             'errors': errors,
+#             'total_time': f'{totaltime:.2f} seconds',  
+#             'datas': datas
+#         }, status=status.HTTP_200_OK)
 
 
 
@@ -177,5 +177,110 @@ class BinancePairsView(APIView):
 #             'errors': errors,
 #             'total_time': f'{totaltime:.2f} seconds',  # زمان کل
 #             'datas': datas
+#         }, status=status.HTTP_200_OK)
+
+# **************************************************************************************
+
+import requests
+import requests
+import time
+from datetime import datetime
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Pairs, PairsKlines
+
+class PairsView(APIView):
+    def get(self, request):
+        url = 'https://api.binance.com/api/v3/ticker/price'
+        
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            pairs_data = response.json()
+            
+            saved_pairs = []
+            for pair in pairs_data:
+                pair_obj, created = Pairs.objects.update_or_create(
+                    symbol=pair['symbol'],
+                    defaults={'price': pair['price']}
+                )
+                saved_pairs.append({
+                    'symbol': pair_obj.symbol,
+                    'price': str(pair_obj.price),
+                })
+                
+            return Response({
+                'message': 'Pairs data fetched and saved successfully',
+                'pairs': saved_pairs
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+# class KlinesView(APIView):
+#     def get(self, request):
+#         pairs = Pairs.objects.all()
+#         all_klines_data = []
+        
+#         for pair in pairs:
+#             url = 'https://api.binance.com/api/v3/klines'
+#             params = {
+#                 'symbol': pair.symbol,
+#                 'interval': '1h',
+#                 'limit': 100  # Reduced limit for demonstration
+#             }
+            
+#             try:
+#                 response = requests.get(url, params=params)
+#                 response.raise_for_status()
+#                 klines_data = response.json()
+                
+#                 pair_klines = []
+#                 for kline in klines_data:
+#                     kline_obj, created = PairsKlines.objects.update_or_create(
+#                         pair=pair,
+#                         open_time=datetime.fromtimestamp(kline[0]/1000),
+#                         defaults={
+#                             'open_price': kline[1],
+#                             'high_price': kline[2],
+#                             'low_price': kline[3],
+#                             'close_price': kline[4],
+#                             'volume': kline[5],
+#                             'close_time': datetime.fromtimestamp(kline[6]/1000),
+#                             'trades_count': kline[8]
+#                         }
+#                     )
+                    
+#                     pair_klines.append({
+#                         'open_time': kline_obj.open_time,
+#                         'open_price': str(kline_obj.open_price),
+#                         'high_price': str(kline_obj.high_price),
+#                         'low_price': str(kline_obj.low_price),
+#                         'close_price': str(kline_obj.close_price),
+#                         'volume': str(kline_obj.volume),
+#                         'close_time': kline_obj.close_time,
+#                         'trades_count': kline_obj.trades_count,
+#                         'is_new': created
+#                     })
+                
+#                 all_klines_data.append({
+#                     'symbol': pair.symbol,
+#                     'klines': pair_klines
+#                 })
+                
+#                 time.sleep(0.5)  # Rate limiting
+                    
+#             except Exception as e:
+#                 print(f"Error fetching klines for {pair.symbol}: {str(e)}")
+#                 continue
+                
+#         return Response({
+#             'message': 'Klines data fetched and saved successfully',
+#             'pairs_count': len(pairs),
+#             'data': all_klines_data
 #         }, status=status.HTTP_200_OK)
 

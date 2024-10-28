@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import BinancePair
+from .models import Pairs
 
 
-admin.site.register(BinancePair)
+admin.site.register(Pairs)
