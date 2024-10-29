@@ -182,7 +182,8 @@
 # **************************************************************************************
 
 import requests
-# import time
+import time
+import logging
 from datetime import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -190,6 +191,8 @@ from rest_framework import status
 from .models import Pairs, PairsKlines
 from rest_framework.pagination import PageNumberPagination
 from .serializer import PairsSerializer
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 class PairsView(APIView, PageNumberPagination):
     
     def get(self, request):
@@ -230,66 +233,82 @@ class PairsView(APIView, PageNumberPagination):
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
-# class KlinesView(APIView):
-#     def get(self, request):
-#         pairs = Pairs.objects.all()
-#         all_klines_data = []
+logger = logging.getLogger(__name__)
+
+class KlinesView(APIView):
+    def get(self, request):
+        pairs = Pairs.objects.all()
+        all_klines_data = []
+        url = 'https://api.binance.com/api/v3/klines'
+
+        def fetch_klines(pair):
+            params = {
+                'symbol': pair.symbol,
+                'interval': '1h',
+                'limit': 5
+            }
+            try:
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                klines_data = response.json()
+                
+                pair_klines = []
+                for kline in klines_data:
+                    kline_obj, created = PairsKlines.objects.update_or_create(
+                        pair=pair,
+                        open_time=datetime.fromtimestamp(kline[0]/1000),
+                        defaults={
+                            'open_price': kline[1],
+                            'high_price': kline[2],
+                            'low_price': kline[3],
+                            'close_price': kline[4],
+                            'volume': kline[5],
+                            'close_time': datetime.fromtimestamp(kline[6]/1000),
+                            'trades_count': kline[8]
+                        }
+                    )
+                    
+                    pair_klines.append({
+                        'open_time': kline_obj.open_time,
+                        'open_price': str(kline_obj.open_price),
+                        'high_price': str(kline_obj.high_price),
+                        'low_price': str(kline_obj.low_price),
+                        'close_price': str(kline_obj.close_price),
+                        'volume': str(kline_obj.volume),
+                        'close_time': kline_obj.close_time,
+                        'trades_count': kline_obj.trades_count,
+                        'is_new': created
+                    })
+                
+                return {'symbol': pair.symbol, 'klines': pair_klines}
+            except Exception as e:
+                logger.error(f"Error fetching klines for {pair.symbol}: {str(e)}")
+                return None
+
         
-#         for pair in pairs:
-#             url = 'https://api.binance.com/api/v3/klines'
-#             params = {
-#                 'symbol': pair.symbol,
-#                 'interval': '1h',
-#                 'limit': 100  # Reduced limit for demonstration
-#             }
-            
-#             try:
-#                 response = requests.get(url, params=params)
-#                 response.raise_for_status()
-#                 klines_data = response.json()
-                
-#                 pair_klines = []
-#                 for kline in klines_data:
-#                     kline_obj, created = PairsKlines.objects.update_or_create(
-#                         pair=pair,
-#                         open_time=datetime.fromtimestamp(kline[0]/1000),
-#                         defaults={
-#                             'open_price': kline[1],
-#                             'high_price': kline[2],
-#                             'low_price': kline[3],
-#                             'close_price': kline[4],
-#                             'volume': kline[5],
-#                             'close_time': datetime.fromtimestamp(kline[6]/1000),
-#                             'trades_count': kline[8]
-#                         }
-#                     )
-                    
-#                     pair_klines.append({
-#                         'open_time': kline_obj.open_time,
-#                         'open_price': str(kline_obj.open_price),
-#                         'high_price': str(kline_obj.high_price),
-#                         'low_price': str(kline_obj.low_price),
-#                         'close_price': str(kline_obj.close_price),
-#                         'volume': str(kline_obj.volume),
-#                         'close_time': kline_obj.close_time,
-#                         'trades_count': kline_obj.trades_count,
-#                         'is_new': created
-#                     })
-                
-#                 all_klines_data.append({
-#                     'symbol': pair.symbol,
-#                     'klines': pair_klines
-#                 })
-                
-#                 time.sleep(0.5)  # Rate limiting
-                    
-#             except Exception as e:
-#                 print(f"Error fetching klines for {pair.symbol}: {str(e)}")
-#                 continue
-                
-#         return Response({
-#             'message': 'Klines data fetched and saved successfully',
-#             'pairs_count': len(pairs),
-#             'data': all_klines_data
-#         }, status=status.HTTP_200_OK)
+        
+        starttime = time.time()
+        
+        batch_size = 100  
+        with ThreadPoolExecutor(max_workers=10) as executor:  
+            futures = {}
+            for i in range(0, len(pairs), batch_size):
+                batch_pairs = pairs[i:i + batch_size]
+                for pair in batch_pairs:
+                    futures[executor.submit(fetch_klines, pair)] = pair
+                time.sleep(1)  
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    all_klines_data.append(result)
+
+        endtime = time.time()
+        totaltime = endtime - starttime 
+        
+        return Response({
+            'message': 'Klines data fetched and saved successfully',
+            'pairs_count': len(pairs),
+            'data': all_klines_data,
+            'totaltime': totaltime,
+        }, status=status.HTTP_200_OK)
 

@@ -2,7 +2,7 @@
 
 # from rest_framework.routers import DefaultRouter
 from django.urls import path, include
-from .views import PairsView
+from .views import PairsView, KlinesView
 
 # router =DefaultRouter()
 
@@ -12,5 +12,6 @@ from .views import PairsView
 
 urlpatterns = [
     
-    path('pairs/', PairsView.as_view(), name='binance_pairs')
+    path('pairs/', PairsView.as_view(), name='binance_pairs'),
+    path('klines/', KlinesView.as_view(), name='binance_klines'),
 ]
