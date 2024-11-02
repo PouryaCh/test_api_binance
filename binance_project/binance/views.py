@@ -184,6 +184,7 @@
 import requests
 import time
 import logging
+from django.db import transaction
 from datetime import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -233,41 +234,56 @@ class PairsView(APIView, PageNumberPagination):
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
-logger = logging.getLogger(__name__)
-
 class KlinesView(APIView):
     def get(self, request):
-        pairs = Pairs.objects.all()
-        all_klines_data = []
-        url = 'https://api.binance.com/api/v3/klines'
+        # Get market information from Binance
+        url = 'https://api.binance.com/api/v3/ticker/24hr'
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            market_data = response.json()
+        except Exception as e:
+            return Response({"message": f"Error fetching market data: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        def fetch_klines(pair):
-            params = {
-                'symbol': pair.symbol,
-                'interval': '1h',
-                'limit': 5
-            }
+        # Sort data based on transaction volume
+        def get_volume(item):
+            return float(item['volume'])
+
+        sorted_market_data = sorted(market_data, key=get_volume, reverse=True)
+        top_100_symbols = [data['symbol'] for data in sorted_market_data[:50]]
+
+        # Disable all symbols and enable top 100 icons
+        with transaction.atomic():
+            Pairs.objects.update(is_active=False)
+            Pairs.objects.filter(symbol__in=top_100_symbols).update(is_active=True)
+
+        # Get and save keylines for 100 active sybols
+        active_pairs = Pairs.objects.filter(is_active=True)
+        klines_url = 'https://api.binance.com/api/v3/klines'
+        all_klines_data = []
+
+        for pair in active_pairs:
+            params = {'symbol': pair.symbol, 'interval': '1h', 'limit': 5}
             try:
-                response = requests.get(url, params=params)
+                response = requests.get(klines_url, params=params)
                 response.raise_for_status()
                 klines_data = response.json()
-                
+
                 pair_klines = []
                 for kline in klines_data:
                     kline_obj, created = PairsKlines.objects.update_or_create(
                         pair=pair,
-                        open_time=datetime.fromtimestamp(kline[0]/1000),
+                        open_time=datetime.fromtimestamp(kline[0] / 1000),
                         defaults={
                             'open_price': kline[1],
                             'high_price': kline[2],
                             'low_price': kline[3],
                             'close_price': kline[4],
                             'volume': kline[5],
-                            'close_time': datetime.fromtimestamp(kline[6]/1000),
+                            'close_time': datetime.fromtimestamp(kline[6] / 1000),
                             'trades_count': kline[8]
                         }
                     )
-                    
                     pair_klines.append({
                         'open_time': kline_obj.open_time,
                         'open_price': str(kline_obj.open_price),
@@ -280,35 +296,11 @@ class KlinesView(APIView):
                         'is_new': created
                     })
                 
-                return {'symbol': pair.symbol, 'klines': pair_klines}
+                all_klines_data.append({'symbol': pair.symbol, 'klines': pair_klines})
             except Exception as e:
-                logger.error(f"Error fetching klines for {pair.symbol}: {str(e)}")
-                return None
+                continue  
 
-        
-        
-        starttime = time.time()
-        
-        batch_size = 100  
-        with ThreadPoolExecutor(max_workers=10) as executor:  
-            futures = {}
-            for i in range(0, len(pairs), batch_size):
-                batch_pairs = pairs[i:i + batch_size]
-                for pair in batch_pairs:
-                    futures[executor.submit(fetch_klines, pair)] = pair
-                time.sleep(1)  
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    all_klines_data.append(result)
-
-        endtime = time.time()
-        totaltime = endtime - starttime 
-        
         return Response({
-            'message': 'Klines data fetched and saved successfully',
-            'pairs_count': len(pairs),
-            'data': all_klines_data,
-            'totaltime': totaltime,
+            'message': 'Klines data fetched and saved successfully for top 100 pairs',
+            'data': all_klines_data
         }, status=status.HTTP_200_OK)
-
