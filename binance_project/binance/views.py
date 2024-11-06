@@ -183,49 +183,31 @@
 
 import requests
 import time
-import logging
+# import logging
 from django.db import transaction
 from datetime import datetime
 from rest_framework.views import APIView
+# from rest_framework import viewsets
+# from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Pairs, PairsKlines
-from rest_framework.pagination import PageNumberPagination
-from .serializer import PairsSerializer
+from .models import Exchange, Pairs, PairsKlines
+# from rest_framework.pagination import PageNumberPagination
+# from .serializer import ExchangeSerializer, PairsSerializer, KlineSerializer
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-class PairsView(APIView, PageNumberPagination):
+
+class ExchangeView(APIView):
     
     def get(self, request):
-        url = 'https://api.binance.com/api/v3/ticker/price'
-        
         try:
-            response = requests.get(url)
-            response.raise_for_status()
-            pairs_data = response.json()
             
-            saved_pairs = []
-            for pair in pairs_data:
-                pair_obj, created = Pairs.objects.update_or_create(
-                    symbol=pair['symbol'],
-                    defaults={'price': pair['price']}
-                )
-                saved_pairs.append({
-                    'symbol': pair_obj.symbol,
-                    'price': str(pair_obj.price),
-                })
-                
-            result = self.paginate_queryset(saved_pairs, request, view=self)
-            serializer = PairsSerializer(result, many=True)
+            exchanges = Exchange.objects.all()
+            exchange_data = [{'name': exchange.name, 'url': exchange.api_url} for exchange in exchanges]
             
             return Response({
-                'message': 'Pairs data fetched and saved successfully',
-                'count': len(saved_pairs), 
-                'next': self.get_next_link(),  
-                'previous': self.get_previous_link(),  
-                'current_page': request.query_params.get('page', 1),  
-                'total_pages': (len(saved_pairs) + self.page_size - 1) // self.page_size,  
-                'pairs': serializer.data
+                'message': 'Exchange data fetched successfully',
+                'exchanges': exchange_data
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -234,9 +216,176 @@ class PairsView(APIView, PageNumberPagination):
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
+
+
+class PairsView(APIView):
+    
+    
+    def get(self, request, exchange_name):
+        try:
+            
+            exchange = Exchange.objects.get(name=exchange_name)
+            
+            
+            pairs = Pairs.objects.filter(exchange=exchange)
+            pairs_data = [{'symbol': pair.symbol, 'price': str(pair.price)} for pair in pairs]
+            
+            return Response({
+                'message': f'Pairs for exchange {exchange.name} fetched successfully',
+                'exchange': exchange.name,
+                'pairs': pairs_data
+            }, status=status.HTTP_200_OK)
+            
+        except Exchange.DoesNotExist:
+            return Response({
+                'error': 'Exchange not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # def get(self, request):
+    #     url = 'https://api.binance.com/api/v3/ticker/price'
+        
+    #     try:
+    #         response = requests.get(url)
+    #         response.raise_for_status()
+    #         pairs_data = response.json()
+            
+    #         saved_pairs = []
+    #         for pair in pairs_data:
+    #             pair_obj, created = Pairs.objects.update_or_create(
+    #                 symbol=pair['symbol'],
+    #                 defaults={'price': pair['price']}
+    #             )
+    #             saved_pairs.append({
+    #                 'symbol': pair_obj.symbol,
+    #                 'price': str(pair_obj.price),
+    #             })
+                
+    #         result = self.paginate_queryset(saved_pairs, request, view=self)
+    #         serializer = PairsSerializer(result, many=True)
+            
+    #         return Response({
+    #             'message': 'Pairs data fetched and saved successfully',
+    #             'count': len(saved_pairs), 
+    #             'next': self.get_next_link(),  
+    #             'previous': self.get_previous_link(),  
+    #             'current_page': request.query_params.get('page', 1),  
+    #             'total_pages': (len(saved_pairs) + self.page_size - 1) // self.page_size,  
+    #             'pairs': serializer.data
+    #         }, status=status.HTTP_200_OK)
+            
+    #     except Exception as e:
+    #         return Response({
+    #             'error': str(e)
+    #         }, status=status.HTTP_400_BAD_REQUEST)
+
+# class KlinesView(APIView):
+#     def get(self, request):
+        
+#         symbol = request.query_params.get('symbol')
+#         interval = request.query_params.get('interval', '1h')
+#         limit = int(request.query_params.get('limit', 5))
+
+#         print(f"Interval: {interval}, Limit: {limit}")
+        
+        
+#         # Get market information from Binance
+#         url = 'https://api.binance.com/api/v3/ticker/24hr'
+#         try:
+#             response = requests.get(url)
+#             response.raise_for_status()
+#             market_data = response.json()
+#         except Exception as e:
+#             return Response({"message": f"Error fetching market data: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+#         # Sort data based on transaction volume
+#         def get_volume(item):
+#             return float(item['volume'])
+
+#         sorted_market_data = sorted(market_data, key=get_volume, reverse=True)
+#         top_100_symbols = [data['symbol'] for data in sorted_market_data[:50]]
+
+#         # Disable all symbols and enable top 100 icons
+#         with transaction.atomic():
+#             Pairs.objects.update(is_active=False)
+#             Pairs.objects.filter(symbol__in=top_100_symbols).update(is_active=True)
+
+#         # Get and save keylines for 100 active symbols
+#         active_pairs = Pairs.objects.filter(is_active=True)
+#         klines_url = 'https://api.binance.com/api/v3/klines'
+#         all_klines_data = []
+
+#         def fetch_klines(pair):
+#             params = {'symbol': pair.symbol, 'interval': interval, 'limit': limit}
+#             try:
+#                 response = requests.get(klines_url, params=params)
+#                 response.raise_for_status()
+#                 klines_data = response.json()
+
+#                 pair_klines = []
+#                 for kline in klines_data:
+#                     kline_obj, created = PairsKlines.objects.update_or_create(
+#                         pair=pair,
+#                         open_time=datetime.fromtimestamp(kline[0] / 1000),
+#                         defaults={
+#                             'open_price': kline[1],
+#                             'high_price': kline[2],
+#                             'low_price': kline[3],
+#                             'close_price': kline[4],
+#                             'volume': kline[5],
+#                             'close_time': datetime.fromtimestamp(kline[6] / 1000),
+#                             'trades_count': kline[8]
+#                         }
+#                     )
+#                     pair_klines.append({
+#                         'open_time': kline_obj.open_time,
+#                         'open_price': str(kline_obj.open_price),
+#                         'high_price': str(kline_obj.high_price),
+#                         'low_price': str(kline_obj.low_price),
+#                         'close_price': str(kline_obj.close_price),
+#                         'volume': str(kline_obj.volume),
+#                         'close_time': kline_obj.close_time,
+#                         'trades_count': kline_obj.trades_count,
+#                         'is_new': created
+#                     })
+                
+#                 return {'symbol': pair.symbol, 'klines': pair_klines}
+#             except Exception as e:
+#                 return {'symbol': pair.symbol, 'error': str(e)}
+#         starttime = time.time()
+#         # Use ThreadPoolExecutor for concurrent requests
+#         with ThreadPoolExecutor(max_workers=10) as executor:
+#             future_to_pair = {executor.submit(fetch_klines, pair): pair for pair in active_pairs}
+#             for future in as_completed(future_to_pair):
+#                 result = future.result()
+#                 if 'error' not in result:
+#                     all_klines_data.append(result)
+        
+#         endtime = time.time()
+#         total_time = endtime - starttime
+         
+#         return Response({
+#             'message': 'Klines data fetched and saved successfully for top 50 pairs',
+#             'data': all_klines_data,
+#             'totaltime' : total_time
+#         }, status=status.HTTP_200_OK)
+
+
+
 class KlinesView(APIView):
     def get(self, request):
-        # Get market information from Binance
+        symbol = request.query_params.get('symbol')
+        interval = request.query_params.get('interval', '1h')
+        limit = int(request.query_params.get('limit', 5))
+
+        print(f"Interval: {interval}, Limit: {limit}")
+
+        if not symbol:
+            return Response({"message": "Symbol is required."}, status=status.HTTP_400_BAD_REQUEST)
+
         url = 'https://api.binance.com/api/v3/ticker/24hr'
         try:
             response = requests.get(url)
@@ -245,25 +394,19 @@ class KlinesView(APIView):
         except Exception as e:
             return Response({"message": f"Error fetching market data: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Sort data based on transaction volume
-        def get_volume(item):
-            return float(item['volume'])
+        if symbol not in [data['symbol'] for data in market_data]:
+            return Response({"message": "Symbol not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        sorted_market_data = sorted(market_data, key=get_volume, reverse=True)
-        top_100_symbols = [data['symbol'] for data in sorted_market_data[:50]]
-
-        # Disable all symbols and enable top 100 icons
         with transaction.atomic():
             Pairs.objects.update(is_active=False)
-            Pairs.objects.filter(symbol__in=top_100_symbols).update(is_active=True)
+            Pairs.objects.filter(symbol=symbol).update(is_active=True)
 
-        # Get and save keylines for 100 active sybols
         active_pairs = Pairs.objects.filter(is_active=True)
         klines_url = 'https://api.binance.com/api/v3/klines'
         all_klines_data = []
 
-        for pair in active_pairs:
-            params = {'symbol': pair.symbol, 'interval': '1h', 'limit': 5}
+        def fetch_klines(pair):
+            params = {'symbol': pair.symbol, 'interval': interval, 'limit': limit}
             try:
                 response = requests.get(klines_url, params=params)
                 response.raise_for_status()
@@ -296,11 +439,23 @@ class KlinesView(APIView):
                         'is_new': created
                     })
                 
-                all_klines_data.append({'symbol': pair.symbol, 'klines': pair_klines})
+                return {'symbol': pair.symbol, 'klines': pair_klines}
             except Exception as e:
-                continue  
+                return {'symbol': pair.symbol, 'error': str(e)}
 
+        starttime = time.time()
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_pair = {executor.submit(fetch_klines, pair): pair for pair in active_pairs}
+            for future in as_completed(future_to_pair):
+                result = future.result()
+                if 'error' not in result:
+                    all_klines_data.append(result)
+        
+        endtime = time.time()
+        total_time = endtime - starttime
+         
         return Response({
-            'message': 'Klines data fetched and saved successfully for top 100 pairs',
-            'data': all_klines_data
+            'message': 'Klines data fetched and saved successfully for the specified pair',
+            'data': all_klines_data,
+            'totaltime': total_time
         }, status=status.HTTP_200_OK)
