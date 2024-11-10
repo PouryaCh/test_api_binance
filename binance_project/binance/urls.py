@@ -13,5 +13,5 @@ from .views import ExchangeView, PairsView, KlinesView
 urlpatterns = [
     
     path('exchanges/', ExchangeView.as_view(), name='exchange-list'),
-    path('exchanges/<str:exchange_name>/pairs/', PairsView.as_view(), name='pairs-list'),
+    path('<str:exchange_name>/pairs/', PairsView.as_view(), name='pairs-list'),
 ]

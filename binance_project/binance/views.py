@@ -197,11 +197,44 @@ from .models import Exchange, Pairs, PairsKlines
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
+
+
+
+def normalize_pair_data(exchange_name, pair):
+    
+    if exchange_name == "Binance":
+        price = pair.get('price')
+        
+        return {
+            'symbol': pair.get('symbol'),
+            'price': price if price is not None else 0.0  
+        }
+    elif exchange_name == "Liquid":
+        price = pair.get('last_traded_price')
+        return {
+            'symbol': pair.get('currency_pair_code'),
+            'price': price if price is not None else 0.0  
+        }
+    elif exchange_name == "HitBTC":
+        price = pair.get('last')
+        return {
+            'symbol': pair.get('symbol'),
+            'price': price if price is not None else 0.0  
+        }
+    elif exchange_name == "Coingecko":
+           
+        price = pair.get('current_price')
+        return {
+            'symbol': pair.get('symbol'),
+            'price': price if price is not None else 0.0,  
+        }
+    else:
+        raise ValueError(f"Unsupported exchange data structure for exchange: {exchange_name}")
+
 class ExchangeView(APIView):
     
     def get(self, request):
         try:
-            
             exchanges = Exchange.objects.all()
             exchange_data = [{'name': exchange.name, 'url': exchange.api_url} for exchange in exchanges]
             
@@ -216,35 +249,55 @@ class ExchangeView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
-
-
 class PairsView(APIView):
-    
     
     def get(self, request, exchange_name):
         try:
-            
             exchange = Exchange.objects.get(name=exchange_name)
+            response = requests.get(exchange.api_url)
+            response.raise_for_status()
+            pairs_data = response.json()
             
-            
-            pairs = Pairs.objects.filter(exchange=exchange)
-            pairs_data = [{'symbol': pair.symbol, 'price': str(pair.price)} for pair in pairs]
+            saved_pairs = []
+            with transaction.atomic():
+                for pair in pairs_data:
+                   
+                    normalized_pair = normalize_pair_data(exchange.name, pair)
+                    
+                   
+                    pair_obj, created = Pairs.objects.update_or_create(
+                        symbol=normalized_pair['symbol'],
+                        exchange=exchange,
+                        defaults={'price': normalized_pair['price']}
+                    )
+                    saved_pairs.append({
+                        'symbol': pair_obj.symbol,
+                        'price': str(pair_obj.price),
+                        'is_new': created
+                    })
             
             return Response({
-                'message': f'Pairs for exchange {exchange.name} fetched successfully',
-                'exchange': exchange.name,
-                'pairs': pairs_data
+                'message': f'Pairs for exchange {exchange.name} fetched and saved successfully',
+                'pairs': saved_pairs
             }, status=status.HTTP_200_OK)
             
         except Exchange.DoesNotExist:
             return Response({
                 'error': 'Exchange not found'
             }, status=status.HTTP_404_NOT_FOUND)
+        except requests.RequestException as e:
+            return Response({
+                'error': f"Error fetching pairs from exchange API: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except ValueError as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({
                 'error': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
-    
+
     # def get(self, request):
     #     url = 'https://api.binance.com/api/v3/ticker/price'
         
