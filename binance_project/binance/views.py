@@ -184,6 +184,7 @@
 import requests
 import time
 # import logging
+from decimal import Decimal, InvalidOperation
 from django.db import transaction
 from datetime import datetime
 from rest_framework.views import APIView
@@ -428,87 +429,129 @@ class PairsView(APIView):
 
 
 
+
 class KlinesView(APIView):
-    def get(self, request):
+    def get(self, request, exchange_name):
         symbol = request.query_params.get('symbol')
-        interval = request.query_params.get('interval', '1h')
-        limit = int(request.query_params.get('limit', 5))
+        interval = request.query_params.get('interval', '1h')  # Default interval is 1 hour
+        limit = int(request.query_params.get('limit', 5))  # Default limit is 5 candles
 
-        print(f"Interval: {interval}, Limit: {limit}")
-
+        # Check if symbol is provided
         if not symbol:
             return Response({"message": "Symbol is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        url = 'https://api.binance.com/api/v3/ticker/24hr'
+        # Define the API endpoints and parameters based on the exchange
+        url_params = {
+            "Binance": ('https://api.binance.com/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit}),
+            "Liquid": ('https://api.liquid.com/products', {}),
+            "HitBTC": ('https://api.hitbtc.com/api/2/public/candles', {'symbol': symbol, 'period': interval, 'limit': limit}),
+        }
+
+        # Check if the requested exchange is supported
+        if exchange_name not in url_params:
+            return Response({"message": "Unsupported exchange."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get URL and params for the requested exchange
+        url, params = url_params[exchange_name]
+
         try:
-            response = requests.get(url)
+            # Send a request to the API
+            response = requests.get(url, params=params)
             response.raise_for_status()
-            market_data = response.json()
+            klines_data = response.json()
+
+            # Process data based on exchange
+            if exchange_name == "Binance":
+                processed_data = self.process_binance_data(klines_data)
+            elif exchange_name == "Liquid":
+                processed_data = self.process_liquid_data(klines_data, symbol)
+            elif exchange_name == "HitBTC":
+                processed_data = self.process_hitbtc_data(klines_data)
+
+            # Save data into the database
+            pair, _ = Pairs.objects.get_or_create(symbol=symbol, exchange__name=exchange_name)
+            pair_klines = []
+
+            for kline in processed_data:
+                kline_obj, created = PairsKlines.objects.update_or_create(
+                    pair=pair,
+                    open_time=kline['open_time'],
+                    defaults={
+                        'open_price': kline['open_price'],
+                        'high_price': kline['high_price'],
+                        'low_price': kline['low_price'],
+                        'close_price': kline['close_price'],
+                        'volume': kline['volume'],
+                        'close_time': kline['close_time'],
+                        'trades_count': kline['trades_count']
+                    }
+                )
+                pair_klines.append({
+                    'open_time': kline_obj.open_time,
+                    'open_price': str(kline_obj.open_price),
+                    'high_price': str(kline_obj.high_price),
+                    'low_price': str(kline_obj.low_price),
+                    'close_price': str(kline_obj.close_price),
+                    'volume': str(kline_obj.volume),
+                    'close_time': kline_obj.close_time,
+                    'trades_count': kline_obj.trades_count,
+                    'is_new': created
+                })
+
+            return Response({
+                'message': f"Klines data fetched and saved successfully for {symbol} from {exchange_name}",
+                'data': pair_klines
+            }, status=status.HTTP_200_OK)
+
+        except requests.RequestException as e:
+            return Response({"message": f"Error fetching market data from {exchange_name}: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
-            return Response({"message": f"Error fetching market data: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"message": f"Error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if symbol not in [data['symbol'] for data in market_data]:
-            return Response({"message": "Symbol not found."}, status=status.HTTP_404_NOT_FOUND)
+    def process_binance_data(self, data):
+        processed_data = []
+        for kline in data:
+            processed_data.append({
+                'open_time': datetime.fromtimestamp(kline[0] / 1000),
+                'open_price': Decimal(kline[1]),
+                'high_price': Decimal(kline[2]),
+                'low_price': Decimal(kline[3]),
+                'close_price': Decimal(kline[4]),
+                'volume': Decimal(kline[5]),
+                'close_time': datetime.fromtimestamp(kline[6] / 1000),
+                'trades_count': kline[8]
+            })
+        return processed_data
 
-        with transaction.atomic():
-            Pairs.objects.update(is_active=False)
-            Pairs.objects.filter(symbol=symbol).update(is_active=True)
+    def process_liquid_data(self, data, symbol):
+        filtered_data = [
+            item for item in data if item.get('currency_pair_code') == symbol
+        ]
+        processed_data = []
+        for item in filtered_data:
+            processed_data.append({
+                'open_time': datetime.fromtimestamp(float(item['last_event_timestamp'])),
+                'open_price': Decimal(item.get('market_ask', 0)),
+                'high_price': Decimal(item.get('high_market_ask', 0)),
+                'low_price': Decimal(item.get('low_market_bid', 0)),
+                'close_price': Decimal(item.get('last_traded_price', 0)),
+                'volume': Decimal(item.get('volume_24h', 0)),
+                'close_time': datetime.fromtimestamp(float(item['timestamp'])),
+                'trades_count': 0
+            })
+        return processed_data
 
-        active_pairs = Pairs.objects.filter(is_active=True)
-        klines_url = 'https://api.binance.com/api/v3/klines'
-        all_klines_data = []
-
-        def fetch_klines(pair):
-            params = {'symbol': pair.symbol, 'interval': interval, 'limit': limit}
-            try:
-                response = requests.get(klines_url, params=params)
-                response.raise_for_status()
-                klines_data = response.json()
-
-                pair_klines = []
-                for kline in klines_data:
-                    kline_obj, created = PairsKlines.objects.update_or_create(
-                        pair=pair,
-                        open_time=datetime.fromtimestamp(kline[0] / 1000),
-                        defaults={
-                            'open_price': kline[1],
-                            'high_price': kline[2],
-                            'low_price': kline[3],
-                            'close_price': kline[4],
-                            'volume': kline[5],
-                            'close_time': datetime.fromtimestamp(kline[6] / 1000),
-                            'trades_count': kline[8]
-                        }
-                    )
-                    pair_klines.append({
-                        'open_time': kline_obj.open_time,
-                        'open_price': str(kline_obj.open_price),
-                        'high_price': str(kline_obj.high_price),
-                        'low_price': str(kline_obj.low_price),
-                        'close_price': str(kline_obj.close_price),
-                        'volume': str(kline_obj.volume),
-                        'close_time': kline_obj.close_time,
-                        'trades_count': kline_obj.trades_count,
-                        'is_new': created
-                    })
-                
-                return {'symbol': pair.symbol, 'klines': pair_klines}
-            except Exception as e:
-                return {'symbol': pair.symbol, 'error': str(e)}
-
-        starttime = time.time()
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_pair = {executor.submit(fetch_klines, pair): pair for pair in active_pairs}
-            for future in as_completed(future_to_pair):
-                result = future.result()
-                if 'error' not in result:
-                    all_klines_data.append(result)
-        
-        endtime = time.time()
-        total_time = endtime - starttime
-         
-        return Response({
-            'message': 'Klines data fetched and saved successfully for the specified pair',
-            'data': all_klines_data,
-            'totaltime': total_time
-        }, status=status.HTTP_200_OK)
+    def process_hitbtc_data(self, data):
+        processed_data = []
+        for kline in data:
+            processed_data.append({
+                'open_time': datetime.fromisoformat(kline['timestamp'].replace("Z", "")),
+                'open_price': Decimal(kline['open']),
+                'high_price': Decimal(kline['high']),
+                'low_price': Decimal(kline['low']),
+                'close_price': Decimal(kline['last']),
+                'volume': Decimal(kline['volume']),
+                'close_time': datetime.fromisoformat(kline['timestamp'].replace("Z", "")),
+                'trades_count': 0
+            })
+        return processed_data
