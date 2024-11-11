@@ -200,12 +200,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 
-
 def normalize_pair_data(exchange_name, pair):
-    
     if exchange_name == "Binance":
         price = pair.get('price')
-        
         return {
             'symbol': pair.get('symbol'),
             'price': price if price is not None else 0.0  
@@ -223,17 +220,28 @@ def normalize_pair_data(exchange_name, pair):
             'price': price if price is not None else 0.0  
         }
     elif exchange_name == "Coingecko":
-           
         price = pair.get('current_price')
         return {
             'symbol': pair.get('symbol'),
             'price': price if price is not None else 0.0,  
         }
+    elif exchange_name == "Bybit":
+        price = pair.get('lastPrice')  # قیمت آخر از Bybit
+        return {
+            'symbol': pair.get('symbol'),
+            'price': price if price is not None else 0.0,  
+        }
+    elif exchange_name == "Crypto.com":
+        price = pair.get('a')  # قیمت آخر از Crypto.com
+        return {
+            'symbol': pair.get('i'),  # نماد جفت ارز از Crypto.com
+            'price': price if price is not None else 0.0,
+        }
     else:
         raise ValueError(f"Unsupported exchange data structure for exchange: {exchange_name}")
 
+
 class ExchangeView(APIView):
-    
     def get(self, request):
         try:
             exchanges = Exchange.objects.all()
@@ -257,15 +265,13 @@ class PairsView(APIView):
             exchange = Exchange.objects.get(name=exchange_name)
             response = requests.get(exchange.api_url)
             response.raise_for_status()
-            pairs_data = response.json()
+            pairs_data = response.json()['result']['data']
             
             saved_pairs = []
             with transaction.atomic():
                 for pair in pairs_data:
-                   
                     normalized_pair = normalize_pair_data(exchange.name, pair)
                     
-                   
                     pair_obj, created = Pairs.objects.update_or_create(
                         symbol=normalized_pair['symbol'],
                         exchange=exchange,
@@ -298,6 +304,7 @@ class PairsView(APIView):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
+
 
     # def get(self, request):
     #     url = 'https://api.binance.com/api/v3/ticker/price'
