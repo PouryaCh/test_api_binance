@@ -200,36 +200,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 
+
 def normalize_pair_data(exchange_name, pair):
     if exchange_name == "Binance":
         price = pair.get('price')
         return {
             'symbol': pair.get('symbol'),
             'price': price if price is not None else 0.0  
-        }
-    elif exchange_name == "Liquid":
-        price = pair.get('last_traded_price')
-        return {
-            'symbol': pair.get('currency_pair_code'),
-            'price': price if price is not None else 0.0  
-        }
-    elif exchange_name == "HitBTC":
-        price = pair.get('last')
-        return {
-            'symbol': pair.get('symbol'),
-            'price': price if price is not None else 0.0  
-        }
-    elif exchange_name == "Coingecko":
-        price = pair.get('current_price')
-        return {
-            'symbol': pair.get('symbol'),
-            'price': price if price is not None else 0.0,  
-        }
-    elif exchange_name == "Bybit":
-        price = pair.get('lastPrice')  # قیمت آخر از Bybit
-        return {
-            'symbol': pair.get('symbol'),
-            'price': price if price is not None else 0.0,  
         }
     elif exchange_name == "Crypto.com":
         price = pair.get('a')  # قیمت آخر از Crypto.com
@@ -239,6 +216,10 @@ def normalize_pair_data(exchange_name, pair):
         }
     else:
         raise ValueError(f"Unsupported exchange data structure for exchange: {exchange_name}")
+
+
+
+
 
 
 class ExchangeView(APIView):
@@ -262,19 +243,41 @@ class PairsView(APIView):
     
     def get(self, request, exchange_name):
         try:
-            exchange = Exchange.objects.get(name=exchange_name)
-            response = requests.get(exchange.api_url)
-            response.raise_for_status()
-            pairs_data = response.json()['result']['data']
+            # فقط صرافی‌های Binance و Crypto.com مجاز هستند
+            if exchange_name not in ["Binance", "Crypto.com"]:
+                return Response({
+                    'error': 'Only Binance and Crypto.com exchanges are supported.'
+                }, status=status.HTTP_400_BAD_REQUEST)
             
+            # تعیین URL API برای هر صرافی
+            exchange_api_urls = {
+                "Binance": "https://api.binance.com/api/v3/ticker/price",
+                "Crypto.com": "https://api.crypto.com/v2/public/get-ticker"
+            }
+            
+            api_url = exchange_api_urls.get(exchange_name)
+            response = requests.get(api_url)
+            response.raise_for_status()
+            
+            # تعیین داده‌ها بر اساس صرافی
+            if exchange_name == "Binance":
+                pairs_data = response.json()  # لیست جفت‌ارزها در پاسخ Binance
+            elif exchange_name == "Crypto.com":
+                pairs_data = response.json().get('result', {}).get('data', [])  # داده‌ها از بخش result -> data
+            
+            # ذخیره داده‌های جفت‌ارز
             saved_pairs = []
             with transaction.atomic():
                 for pair in pairs_data:
-                    normalized_pair = normalize_pair_data(exchange.name, pair)
+                    normalized_pair = normalize_pair_data(exchange_name, pair)
+
+                    # پیدا کردن صرافی مورد نظر
+                    exchange = Exchange.objects.get(name=exchange_name)
                     
+                    # ایجاد یا به‌روزرسانی رکورد
                     pair_obj, created = Pairs.objects.update_or_create(
                         symbol=normalized_pair['symbol'],
-                        exchange=exchange,
+                        exchange=exchange,  # اضافه کردن exchange به‌عنوان foreign key
                         defaults={'price': normalized_pair['price']}
                     )
                     saved_pairs.append({
@@ -284,18 +287,18 @@ class PairsView(APIView):
                     })
             
             return Response({
-                'message': f'Pairs for exchange {exchange.name} fetched and saved successfully',
+                'message': f'Pairs for exchange {exchange_name} fetched and saved successfully',
                 'pairs': saved_pairs
             }, status=status.HTTP_200_OK)
             
-        except Exchange.DoesNotExist:
-            return Response({
-                'error': 'Exchange not found'
-            }, status=status.HTTP_404_NOT_FOUND)
         except requests.RequestException as e:
             return Response({
                 'error': f"Error fetching pairs from exchange API: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exchange.DoesNotExist:
+            return Response({
+                'error': f"Exchange {exchange_name} not found."
+            }, status=status.HTTP_404_NOT_FOUND)
         except ValueError as e:
             return Response({
                 'error': str(e)
@@ -304,7 +307,6 @@ class PairsView(APIView):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
-
 
     # def get(self, request):
     #     url = 'https://api.binance.com/api/v3/ticker/price'
@@ -435,130 +437,88 @@ class PairsView(APIView):
 #         }, status=status.HTTP_200_OK)
 
 
-
-
 class KlinesView(APIView):
     def get(self, request, exchange_name):
         symbol = request.query_params.get('symbol')
-        interval = request.query_params.get('interval', '1h')  # Default interval is 1 hour
-        limit = int(request.query_params.get('limit', 5))  # Default limit is 5 candles
+        interval = request.query_params.get('interval', '1m')
+        limit = int(request.query_params.get('limit', 5))
 
-        # Check if symbol is provided
         if not symbol:
-            return Response({"message": "Symbol is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": "Symbol is required."}, status=400)
 
-        # Define the API endpoints and parameters based on the exchange
-        url_params = {
-            "Binance": ('https://api.binance.com/api/v3/klines', {'symbol': symbol, 'interval': interval, 'limit': limit}),
-            "Liquid": ('https://api.liquid.com/products', {}),
-            "HitBTC": ('https://api.hitbtc.com/api/2/public/candles', {'symbol': symbol, 'period': interval, 'limit': limit}),
+        exchanges = {
+            "Binance": 'https://api.binance.com/api/v3/klines',
+            "Crypto.com": 'https://api.crypto.com/v2/public/get-candlestick',
         }
 
-        # Check if the requested exchange is supported
-        if exchange_name not in url_params:
-            return Response({"message": "Unsupported exchange."}, status=status.HTTP_400_BAD_REQUEST)
+        if exchange_name not in exchanges:
+            return Response({"message": "Unsupported exchange."}, status=400)
 
-        # Get URL and params for the requested exchange
-        url, params = url_params[exchange_name]
+        url = exchanges[exchange_name]
+
+        if exchange_name == "Binance":
+            params = {
+                'symbol': symbol,
+                'interval': interval,
+                'limit': limit
+            }
+        elif exchange_name == "Crypto.com":
+            params = {
+                'instrument_name': symbol,
+                'timeframe': interval
+            }
 
         try:
-            # Send a request to the API
             response = requests.get(url, params=params)
             response.raise_for_status()
-            klines_data = response.json()
+            data = response.json()
 
-            # Process data based on exchange
+
+            if isinstance(data, dict) and data.get("code") != 0:
+                return Response({"message": f"Error from API: {data.get('message')}"}, status=400)
+
             if exchange_name == "Binance":
-                processed_data = self.process_binance_data(klines_data)
-            elif exchange_name == "Liquid":
-                processed_data = self.process_liquid_data(klines_data, symbol)
-            elif exchange_name == "HitBTC":
-                processed_data = self.process_hitbtc_data(klines_data)
+                processed_data = self.process_binance_data(data, limit)
+            elif exchange_name == "Crypto.com":
+                processed_data = self.process_crypto_com_data(data, limit)
 
-            # Save data into the database
-            pair, _ = Pairs.objects.get_or_create(symbol=symbol, exchange__name=exchange_name)
-            pair_klines = []
-
-            for kline in processed_data:
-                kline_obj, created = PairsKlines.objects.update_or_create(
-                    pair=pair,
-                    open_time=kline['open_time'],
-                    defaults={
-                        'open_price': kline['open_price'],
-                        'high_price': kline['high_price'],
-                        'low_price': kline['low_price'],
-                        'close_price': kline['close_price'],
-                        'volume': kline['volume'],
-                        'close_time': kline['close_time'],
-                        'trades_count': kline['trades_count']
-                    }
-                )
-                pair_klines.append({
-                    'open_time': kline_obj.open_time,
-                    'open_price': str(kline_obj.open_price),
-                    'high_price': str(kline_obj.high_price),
-                    'low_price': str(kline_obj.low_price),
-                    'close_price': str(kline_obj.close_price),
-                    'volume': str(kline_obj.volume),
-                    'close_time': kline_obj.close_time,
-                    'trades_count': kline_obj.trades_count,
-                    'is_new': created
-                })
-
-            return Response({
-                'message': f"Klines data fetched and saved successfully for {symbol} from {exchange_name}",
-                'data': pair_klines
-            }, status=status.HTTP_200_OK)
+            return Response({'message': f"Klines data fetched for {symbol} from {exchange_name}", 'data': processed_data}, status=200)
 
         except requests.RequestException as e:
-            return Response({"message": f"Error fetching market data from {exchange_name}: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
-            return Response({"message": f"Error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"message": f"Error fetching data: {str(e)}"}, status=500)
 
-    def process_binance_data(self, data):
-        processed_data = []
-        for kline in data:
-            processed_data.append({
-                'open_time': datetime.fromtimestamp(kline[0] / 1000),
-                'open_price': Decimal(kline[1]),
-                'high_price': Decimal(kline[2]),
-                'low_price': Decimal(kline[3]),
-                'close_price': Decimal(kline[4]),
-                'volume': Decimal(kline[5]),
-                'close_time': datetime.fromtimestamp(kline[6] / 1000),
-                'trades_count': kline[8]
-            })
-        return processed_data
+    def process_binance_data(self, data, limit):
+        try:
+            return [{
+                'open_time': datetime.fromtimestamp(float(kline[0]) / 1000),
+                'open_price': self.safe_decimal_conversion(kline[1]),
+                'high_price': self.safe_decimal_conversion(kline[2]),
+                'low_price': self.safe_decimal_conversion(kline[3]),
+                'close_price': self.safe_decimal_conversion(kline[4]),
+                'volume': self.safe_decimal_conversion(kline[5]),
+                'close_time': datetime.fromtimestamp(float(kline[6]) / 1000),
+                'trades_count': int(kline[8])  
+            } for kline in data[:limit]]
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Error processing Binance data: {str(e)}")
 
-    def process_liquid_data(self, data, symbol):
-        filtered_data = [
-            item for item in data if item.get('currency_pair_code') == symbol
-        ]
-        processed_data = []
-        for item in filtered_data:
-            processed_data.append({
-                'open_time': datetime.fromtimestamp(float(item['last_event_timestamp'])),
-                'open_price': Decimal(item.get('market_ask', 0)),
-                'high_price': Decimal(item.get('high_market_ask', 0)),
-                'low_price': Decimal(item.get('low_market_bid', 0)),
-                'close_price': Decimal(item.get('last_traded_price', 0)),
-                'volume': Decimal(item.get('volume_24h', 0)),
-                'close_time': datetime.fromtimestamp(float(item['timestamp'])),
+    def process_crypto_com_data(self, data, limit):
+        try:
+            return [{
+                'open_time': datetime.fromtimestamp(float(kline['t']) / 1000),
+                'open_price': self.safe_decimal_conversion(kline['o']),
+                'high_price': self.safe_decimal_conversion(kline['h']),
+                'low_price': self.safe_decimal_conversion(kline['l']),
+                'close_price': self.safe_decimal_conversion(kline['c']),
+                'volume': self.safe_decimal_conversion(kline['v']),
+                'close_time': datetime.fromtimestamp(float(kline['t']) / 1000),
                 'trades_count': 0
-            })
-        return processed_data
+            } for kline in data['result']['data'][:limit]]
+        except (ValueError, IndexError, KeyError) as e:
+            raise ValueError(f"Error processing Crypto.com data: {str(e)}")
 
-    def process_hitbtc_data(self, data):
-        processed_data = []
-        for kline in data:
-            processed_data.append({
-                'open_time': datetime.fromisoformat(kline['timestamp'].replace("Z", "")),
-                'open_price': Decimal(kline['open']),
-                'high_price': Decimal(kline['high']),
-                'low_price': Decimal(kline['low']),
-                'close_price': Decimal(kline['last']),
-                'volume': Decimal(kline['volume']),
-                'close_time': datetime.fromisoformat(kline['timestamp'].replace("Z", "")),
-                'trades_count': 0
-            })
-        return processed_data
+    def safe_decimal_conversion(self, value):
+        try:
+            return Decimal(value)
+        except (ValueError, TypeError):
+            return Decimal(0)
